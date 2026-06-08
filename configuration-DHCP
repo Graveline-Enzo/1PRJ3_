@@ -1,0 +1,49 @@
+<#
+.SYNOPSIS
+    Script DHCP Jour 3 - Adapté à la topologie pfSense.
+.DESCRIPTION
+    Configure le serveur DHCP pour la zone LAN (10.10.10.0/24).
+#>
+
+# --- CONFIGURATION BASEE SUR VOTRE SCHÉMA ---
+$ScopeName = "LAN-Utilisateurs"
+$NetworkId = "10.10.10.0"
+$SubnetMask = "255.255.255.0"
+
+# Plage d'IP distribuée aux clients du LAN (ex: de .50 à .200)
+$StartIP = "10.10.10.50"
+$EndIP = "10.10.10.200"
+
+# CONFIGURATION ROUTAGE ET INFRASTRUCTURE
+$Gateway = "10.10.10.254"     # L'IP de l'interface pfSense côté LAN
+$DnsServer = "10.10.30.10"    # L'IP de votre Windows Server (situé dans la zone SERVEURS 10.10.30.0/24)
+$DomainName = "monprojet.local"
+
+Write-Host "=== Configuration du DHCP pour le LAN ($NetworkId) ===" -ForegroundColor Cyan
+
+# 1. Installation du rôle DHCP
+if (-not (Get-WindowsFeature -Name DHCP).Installed) {
+    Install-WindowsFeature -Name DHCP -IncludeManagementTools
+    net sh dhcp add securitygroups
+    Restart-Service -Name DHCPServer -Force
+}
+
+# 2. Création de l'étendue LAN
+$ExistingScope = Get-DhcpServerv4Scope | Where-Object { $_.ScopeId -eq $NetworkId }
+if (-not $ExistingScope) {
+    New-DhcpServerv4Scope -Name $ScopeName -StartRange $StartIP -EndRange $EndIP -SubnetMask $SubnetMask -State Active
+    Write-Host "[OK] Étendue LAN créée." -ForegroundColor Green
+}
+
+# 3. Application des options cruciales pour votre schéma
+# Option 003 : La passerelle doit être le pfSense pour que le LAN puisse aller vers la DMZ ou Internet
+Set-DhcpServerv4OptionValue -ScopeId $NetworkId -OptionId 3 -Value $Gateway
+
+# Option 006 : Le DNS pointe vers la zone SERVEURS pour l'Active Directory
+Set-DhcpServerv4OptionValue -ScopeId $NetworkId -OptionId 6 -Value $DnsServer
+
+# Option 015 : Nom de domaine
+Set-DhcpServerv4OptionValue -ScopeId $NetworkId -OptionId 15 -Value $DomainName
+
+Restart-Service -Name DHCPServer -Force
+Write-Host "=== Serveur DHCP configuré pour le LAN ! ===" -ForegroundColor Cyan
