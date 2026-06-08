@@ -4,74 +4,166 @@
 Ce projet consiste à concevoir, déployer et documenter la maquette virtuelle d'un réseau d'entreprise sécurisé et segmenté. L'objectif principal est d'isoler le réseau bureautique (LAN) des serveurs critiques, tout en exposant un serveur web de manière sécurisée via une zone démilitarisée (DMZ). L'ensemble des flux est contrôlé et filtré par un pare-feu central pfSense selon une politique de sécurité stricte.
 
 ## 🛠️ Technologies Mobilisées
-* **Pare-feu / Routeur :** pfSense
-* **Serveur Web :** Nginx
-* **Accès Distant :** OpenVPN
-* **Analyse de trafic :** Wireshark
-* **Virtualisation :** VirtualBox / VMware
+* **Pare-feu / Routeur :** pfSense 2.8.1
+* **Annuaire :** Windows Server 2022 (Active Directory — domaine `entreprise.local`)
+* **Serveur Web :** Nginx (Ubuntu Server 24.04 LTS)
+* **Accès Distant :** OpenVPN (serveur sur pfSense, UDP 1194)
+* **Analyse de trafic :** Wireshark / Nmap
+* **Virtualisation :** VirtualBox
 
 ---
 
 ## 📐 Architecture Réseau & Plan d'Adressage
 
-Le réseau est découpé en 3 zones distinctes et isolées, interconnectées par le pfSense central :
-
 | Zone | Sous-réseau (CIDR) | Description / Rôle | IP Passerelle (pfSense) |
 | :--- | :--- | :--- | :--- |
-| **WAN** | *Dépendant de l'hôte* | Accès à Internet (Simulé via NAT/Pont) | DHCP Hôte |
-| **LAN** | `10.10.10.0/24` | Réseau bureautique interne (Clients) | `10.10.10.254` |
-| **DMZ** | `10.10.20.0/24` | Zone publique exposant le serveur Nginx | `10.10.20.254` |
-| **SERVEURS** | `10.10.30.0/24` | Segment critique contenant les serveurs internes | `10.10.30.254` |
+| **WAN** | DHCP NAT (`10.0.2.x`) | Accès Internet simulé via NAT VirtualBox | `10.0.2.15` |
+| **LAN** | `10.10.10.0/24` | Réseau interne — Windows Server 2022 (AD/DNS) | `10.10.10.1` |
+| **DMZ** | `10.10.20.0/24` | Zone publique — Serveur Nginx | `10.10.20.1` |
+| **SERVEURS (OPT2)** | `10.10.30.0/24` | Segment isolé — Serveur cible interne | `10.10.30.1` |
 
-### Architecture des Machines Virtuelles (5 VMs minimum)
-1.  **pfSense :** Routeur central doté de 4 interfaces réseau (WAN, LAN, DMZ, SERVEURS).
-2.  **Client LAN (Ubuntu/Windows) :** Machine de test située dans la zone bureautique.
-3.  **Serveur Web DMZ (Ubuntu + Nginx) :** Héberge le service web accessible depuis le LAN.
-4.  **Serveur Interne (Ubuntu/Windows) :** Machine cible dans la zone SERVEURS (totalement isolée de la DMZ).
-5.  **Client Externe (Machine Hôte ou VM dédiée) :** Équipé d'un client OpenVPN pour simuler un accès distant.
+### Machines Virtuelles
+
+| VM | OS | Zone | IP | Rôle |
+| :--- | :--- | :--- | :--- | :--- |
+| **pfSense** | pfSense 2.8.1 | WAN/LAN/DMZ/OPT2 | `10.10.10.1` / `10.10.20.1` / `10.10.30.1` | Routeur central, pare-feu, DHCP, DNS, VPN |
+| **Serveur-AD-LAN** | Windows Server 2022 | LAN | `10.10.10.10` (statique) | Active Directory (`entreprise.local`), DNS, GPO |
+| **Serveur-DMZ** | Ubuntu Server 24.04 | DMZ | `10.10.20.101` (DHCP) | Serveur web Nginx, SSH par clé |
+| **serveur_cible** | Ubuntu Server | OPT2 | `10.10.30.10` (statique) | Serveur interne isolé |
+| **VM Attaquante** *(à venir)* | Windows / Kali | WAN | DHCP NAT | Tests d'intrusion, client OpenVPN |
 
 ---
 
-## 🔒 Politique de Sécurité (Filtrage pfSense)
+## 🔒 Politique de Sécurité — Règles pfSense
 
-Le pare-feu applique une politique stricte de type **"Deny by default"** (tout ce qui n'est pas explicitement autorisé est interdit).
+Politique **"Deny by default"** : tout ce qui n'est pas explicitement autorisé est interdit.
 
-* **Règles de flux implémentées :**
-    * Le **LAN** peut accéder au serveur Nginx en **DMZ** (HTTP/HTTPS).
-    * La **DMZ** est **strictement isolée** du segment **SERVEURS**.
-    * La journalisation (logging) est activée sur toutes les règles de blocage pour assurer la traçabilité des connexions refusées.
+### WAN
+| Action | Protocole | Source | Destination | Port | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| ❌ Block | * | RFC 1918 | * | * | Block private networks |
+| ❌ Block | * | Bogon | * | * | Block bogon networks |
+| ✅ Allow | IPv4 UDP | * | WAN address | 1194 | OpenVPN — Accès distant |
+
+### LAN
+| Action | Protocole | Source | Destination | Port | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| ✅ Allow | * | * | LAN Address | 443/80 | Anti-Lockout Rule |
+| ✅ Allow | IPv4 | LAN subnets | * | * | Default allow LAN to any |
+| ✅ Allow | IPv6 | LAN subnets | * | * | Default allow LAN IPv6 to any |
+
+### DMZ
+| Action | Protocole | Source | Destination | Port | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| ❌ Block | IPv4 | DMZ subnets | `10.10.30.10` | * | Bloquer DMZ vers SERVEURS |
+| ✅ Allow | IPv4 | DMZ subnets | * | * | Allow DMZ outbound |
+
+### OPT2 (SERVEURS)
+| Action | Protocole | Source | Destination | Port | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| ✅ Allow | IPv4 | * | * | * | Allow OPT2 outbound |
+
+---
+
+## 🔐 OpenVPN — Accès Distant
+
+| Paramètre | Valeur |
+| :--- | :--- |
+| **Interface** | WAN |
+| **Protocole** | UDP / Port 1194 |
+| **Réseau tunnel** | `10.8.0.0/24` |
+| **Réseau local accessible** | `10.10.10.0/24` (LAN) |
+| **Authentification** | Local User Access |
+| **CA** | CA-OpenVPN |
+| **Certificat serveur** | Cert-OpenVPN-Server |
+| **Utilisateur VPN** | `vpnuser` (certificat : `cert-vpnuser`) |
+| **Chiffrement** | AES-256-GCM / SHA256 / DH 2048 bit |
+
+Le fichier `.ovpn` est exporté via le package `openvpn-client-export` et disponible dans `./configs/openvpn/`.
+
+---
+
+## 🌐 Serveur Web Nginx (DMZ)
+
+* **IP :** `10.10.20.101`
+* **Config :** `/etc/nginx/sites-enabled/default`
+* **server_name :** `_` (répond à toutes les requêtes)
+* **Port :** 80 (HTTP) avec redirection HTTPS (301)
+* **Accessible depuis :** LAN (`10.10.10.0/24`)
+* **Isolé de :** OPT2/SERVEURS (bloqué par règle pfSense)
+
+---
+
+## 🔑 Accès SSH par Clé
+
+* `PasswordAuthentication no` dans `/etc/ssh/sshd_config` sur tous les serveurs Linux
+* Clé générée sur machine hôte : `ssh-keygen -t ed25519 -C "projet-pfsense"`
+* Clé générée sur Serveur-AD-LAN : `ssh-keygen -t ed25519 -C "projet-pfsense-windows"`
+* Clés publiques déployées dans `~/.ssh/authorized_keys` sur Serveur-DMZ
 
 ---
 
 ## 🚀 Guide de Déploiement
 
-### 1. Configuration des interfaces sur l'hyperviseur
-Pour chaque VM, configurez les cartes réseaux de la manière suivante :
-* **pfSense :** Carte 1 -> NAT (WAN) | Carte 2 -> Réseau Interne `lan-internal` | Carte 3 -> Réseau Interne `dmz-internal` | Carte 4 -> Réseau Interne `srv-internal`.
-* **VMs Clientes/Serveurs :** Assignez chaque VM à son réseau interne respectif (`lan-internal`, `dmz-internal` ou `srv-internal`).
+### 1. Configuration VirtualBox
 
-### 2. Services Réseau (DHCP & DNS)
-* **DHCP :** Activé et configuré sur pfSense pour la zone **LAN** (Plage : `10.10.10.50` à `10.10.10.150`).
-* **DNS :** Géré par le *DNS Resolver* de pfSense avec redirection des flux et enregistrements d'hôtes locaux (Host Overrides) pour la résolution des noms du laboratoire.
+| VM | Carte 1 | Carte 2 | Carte 3 | Carte 4 |
+| :--- | :--- | :--- | :--- | :--- |
+| pfSense | NAT (WAN) | Réseau interne `lan-internal` | Réseau interne `dmz-internal` | Réseau interne `srv-internal` |
+| Serveur-AD-LAN | Réseau interne `lan-internal` | — | — | — |
+| Serveur-DMZ | Réseau interne `dmz-internal` | — | — | — |
+| serveur_cible | Réseau interne `srv-internal` | — | — | — |
+| VM externe | NAT (WAN) | — | — | — |
 
-### 3. Accès Distant (OpenVPN)
-* Mise en place d'un serveur OpenVPN sur pfSense.
-* Exportation du profil de configuration client (`.ovpn`) pour permettre l'accès distant sécurisé au segment LAN depuis l'extérieur.
-
----
-
-## 🧪 Validation & Tests (Recette)
-
-Les dossiers de capture et de preuve sont disponibles dans le répertoire `./captures` :
-
-1.  **Vérification de l'isolation (Wireshark) :** Captures de requêtes de la DMZ vers la zone SERVEURS démontrant le rejet des paquets (Drop/Reject) conformément à la politique de sécurité.
-2.  **Journalisation :** Capture d'écran du dashboard pfSense (Logs du pare-feu en temps réel) montrant les lignes de flux bloqués en rouge.
-3.  **Test d'accès Web :** Succès de la connexion HTTP vers le serveur Nginx depuis le LAN.
+### 2. Services Réseau
+* **DHCP :** pfSense — plage LAN `10.10.10.100` à `10.10.10.200`
+* **DNS :** DNS Resolver pfSense (`10.10.10.1`)
+* **Domaine AD :** `entreprise.local` (Windows Server 2022)
 
 ---
 
-## ⚠️ Procédure de Haute Disponibilité / Bascule (Failover)
+## 🧪 Validation & Tests
 
-En cas de panne du pare-feu central, la procédure de bascule suivante est préconisée pour assurer la continuité d'activité :
-* *Option logicielle (Maquette) :* Sauvegarde régulière et automatisée du fichier `config.xml` de pfSense permettant un redéploiement rapide sur une VM clone.
-* *Option physique (Production) :* Configuration de deux instances pfSense redondantes en cluster via le protocole **CARP** (Common Address Redundancy Protocol) avec synchronisation des tables d'états (pfSync).
+1. **Ping inter-zones** — connectivité selon politique de filtrage
+2. **Isolation DMZ → SERVEURS** — captures Wireshark prouvant le rejet vers `10.10.30.10`
+3. **Accès Web** — connexion HTTP depuis LAN vers Nginx DMZ
+4. **OpenVPN** — connexion depuis VM attaquante (WAN) vers LAN via tunnel VPN
+5. **Audit Nmap** — scan du périmètre depuis Serveur-DMZ (rapport dans `./docs/audit-nmap.md`)
+
+---
+
+## ⚠️ Procédure de Bascule en cas de Panne pfSense
+
+* **Option maquette :** Sauvegarde automatisée du fichier `config.xml` de pfSense via script rsync. Restauration en moins de 15 minutes.
+* **Option production :** Cluster pfSense redondant via protocole **CARP** avec synchronisation des tables d'états (pfSync).
+
+---
+
+## 📁 Structure du Dépôt
+
+```
+projet-1prj2/
+├── docs/
+│   ├── README.md
+│   ├── architecture.png
+│   ├── plan-ip.md
+│   ├── procedure-installation.md
+│   ├── procedure-restauration.md
+│   └── audit-nmap.md
+├── scripts/
+│   ├── bash/
+│   │   ├── deploy-linux.sh
+│   │   └── backup.sh
+│   └── powershell/
+│       ├── deploy-ad.ps1
+│       └── create-users.ps1
+├── configs/
+│   ├── pfsense/
+│   │   └── config.xml
+│   ├── openvpn/
+│   │   └── vpnuser.ovpn
+│   └── nginx/
+│       └── default
+└── soutenance/
+    └── slides.pdf
+```
