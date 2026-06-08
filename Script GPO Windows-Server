@@ -1,11 +1,82 @@
-# Exemple : Automatisation de la création d'une GPO et liaison à une OU
-Import-Module ActiveDirectory
+<#
+.SYNOPSIS
+    Script d'automatisation Jour 3 - Administration Active Directory & GPO.
+.DESCRIPTION
+    1. Crée une Unité Organisationnelle (OU) "Administration".
+    2. Crée des utilisateurs à l'intérieur de cette OU.
+    3. Crée (ou récupère) la GPO "Client-Administration" et la lie à l'OU.
+#>
+
+# --- CONFIGURATION DES VARIABLES ---
+$DomainName = (Get-ADDomain).DistinguishedName # Récupère automatiquement le DN (ex: DC=monprojet,DC=local)
+$OUName = "Administration"
+$OUPath = "OU=$OUName,$DomainName"
+$GPOName = "Client-Administration"
+
+# Liste des utilisateurs à créer (Prénom, Nom, Identifiant)
+$Users = @(
+    @{FirstName="Jean"; LastName="Dupont"; SamName="j.dupont"};
+    @{FirstName="Marie"; LastName="Martin"; SamName="m.martin"}
+)
+
+Write-Host "=== Début de la configuration Active Directory ===" -ForegroundColor Cyan
+
+# --- 1. CRÉATION DE L'UNITÉ ORGANISATIONNELLE (OU) ---
+if (-not (Get-ADOrganizationalUnit -Filter "Name -eq '$OUName'")) {
+    New-ADOrganizationalUnit -Name $OUName -Path $DomainName -ProtectedFromAccidentalDeletion $false
+    Write-Host "[OK] Unité Organisationnelle '$OUName' créée." -ForegroundColor Green
+} else {
+    Write-Host "[INFO] L'OU '$OUName' existe déjà." -ForegroundColor Yellow
+}
+
+# --- 2. CRÉATION DES UTILISATEURS DANS L'OU ---
+foreach ($User in $Users) {
+    $UserUPN = "$($User.SamName)@" + (Get-ADDomain).DNSRoot
+    
+    # Vérification si l'utilisateur existe déjà
+    if (-not (Get-ADUser -Filter "SamAccountName -eq '$($User.SamName)'")) {
+        
+        # Définition d'un mot de passe sécurisé par défaut (Exemple: P@ssword2026!)
+        $Password = ConvertTo-SecureString "P@ssword2026!" -AsPlainText -Force
+        
+        New-ADUser -Name "$($User.FirstName) $($User.LastName)" `
+                   -SamAccountName $User.SamName `
+                   -UserPrincipalName $UserUPN `
+                   -Path $OUPath `
+                   -AccountPassword $Password `
+                   -ChangePasswordAtLogon $true `
+                   -Enabled $true
+                   
+        Write-Host "[OK] Utilisateur $($User.SamName) créé et placé dans l'OU." -ForegroundColor Green
+    } else {
+        Write-Host "[INFO] L'utilisateur $($User.SamName) existe déjà." -ForegroundColor Yellow
+    }
+}
+
+# --- 3. GESTION DE LA GPO 'Client-Administration' ---
 Import-Module GroupPolicy
 
-$OUPath = "OU=Entreprise,DC=monprojet,DC=local"
-$GPOId = New-GPO -Name "Client-Administration" -Comment "GPO automatique Jour 3"
+# Vérifier si la GPO existe, sinon la créer
+$GPO = Get-GPO -Name $GPOName -ErrorAction SilentlyContinue
+if (-not $GPO) {
+    $GPO = New-GPO -Name $GPOName -Comment "GPO automatisée pour les clients du service Administration"
+    Write-Host "[OK] GPO '$GPOName' créée." -ForegroundColor Green
+} else {
+    Write-Host "[INFO] La GPO '$GPOName' existe déjà." -ForegroundColor Yellow
+}
 
-# Lier la GPO à l'Organisation Unit
-New-GPLink -Name "Client-Administration" -Target $OUPath -LinkEnabled Yes
+# Lier la GPO à l'OU "Administration"
+# On vérifie d'abord si le lien existe déjà pour éviter les doublons
+$OULinks = (Get-ADOrganizationalUnit -Identity $OUPath | Get-GPInheritance).GpoLinks
+$AlreadyLinked = $OULinks | Where-Object { $_.DisplayName -eq $GPOName }
 
-Write-Host "La GPO a été créée et liée avec succès !" -ForegroundColor Green
+if (-not $AlreadyLinked) {
+    New-GPLink -Name $GPOName -Target $OUPath -LinkEnabled Yes
+    Write-Host "[OK] GPO '$GPOName' liée avec succès à l'OU '$OUName'." -ForegroundColor Green
+} else {
+    Write-Host "[INFO] La GPO '$GPOName' est déjà liée à cette OU." -ForegroundColor Yellow
+}
+
+# --- 4. MISE À JOUR DES POLITIQUES ---
+gpupdate /force
+Write-Host "=== Configuration AD et GPO terminée avec succès ! ===" -ForegroundColor Cyan
