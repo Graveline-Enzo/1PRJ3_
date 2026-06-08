@@ -1,0 +1,42 @@
+# --- CONFIGURATION DHCP BASE DE TON PROJET ---
+$ScopeName = "LAN-Utilisateurs"
+$NetworkId = "10.10.10.0"
+$SubnetMask = "255.255.255.0"
+$StartIP = "10.10.10.50"
+$EndIP = "10.10.10.200"
+
+# ROUTAGE & DNS
+$Gateway = "10.10.10.1"       # L'IP de ton pfSense LAN
+$DnsServer = "10.10.10.10"    # L'IP de ton Windows Server AD
+$DomainName = "entreprise.local"
+
+Clear-Host
+Write-Host "=== CONFIGURATION DU SERVEUR DHCP ===" -ForegroundColor Cyan
+
+# 1. Installation du rôle DHCP
+if (-not (Get-WindowsFeature -Name DHCP).Installed) {
+    Install-WindowsFeature -Name DHCP -IncludeManagementTools
+    netsh dhcp add securitygroups
+    Restart-Service -Name DHCPServer -Force
+}
+
+# 2. Création de l'étendue LAN
+$ExistingScope = Get-DhcpServerv4Scope | Where-Object { $_.ScopeId -eq $NetworkId }
+if (-not $ExistingScope) {
+    New-DhcpServerv4Scope -Name $ScopeName -StartRange $StartIP -EndRange $EndIP -SubnetMask $SubnetMask -State Active
+    Write-Host "[OK] Étendue LAN 10.10.10.0 créée." -ForegroundColor Green
+}
+
+# 3. Application des options réseau
+Set-DhcpServerv4OptionValue -ScopeId $NetworkId -OptionId 3 -Value $Gateway
+Set-DhcpServerv4OptionValue -ScopeId $NetworkId -OptionId 6 -Value $DnsServer
+Set-DhcpServerv4OptionValue -ScopeId $NetworkId -OptionId 15 -Value $DomainName
+
+# 4. Autorisation AD
+$ServerFQDN = "$(hostname).$DomainName"
+if (-not (Get-DhcpServerInDC | Where-Object { $_.DnsName -eq $ServerFQDN })) {
+    Add-DhcpServerInDC -DnsName $ServerFQDN
+}
+
+Restart-Service -Name DHCPServer -Force
+Write-Host "[OK] Serveur DHCP prêt et actif !" -ForegroundColor Green
