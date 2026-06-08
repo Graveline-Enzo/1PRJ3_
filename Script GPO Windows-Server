@@ -1,0 +1,11 @@
+# Exemple : Automatisation de la création d'une GPO et liaison à une OU
+Import-Module ActiveDirectory
+Import-Module GroupPolicy
+
+$OUPath = "OU=Entreprise,DC=monprojet,DC=local"
+$GPOId = New-GPO -Name "Client-Administration" -Comment "GPO automatique Jour 3"
+
+# Lier la GPO à l'Organisation Unit
+New-GPLink -Name "Client-Administration" -Target $OUPath -LinkEnabled Yes
+
+Write-Host "La GPO a été créée et liée avec succès !" -ForegroundColor Green
